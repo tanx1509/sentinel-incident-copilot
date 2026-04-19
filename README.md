@@ -74,8 +74,6 @@ of every incident is pure *searching*, not fixing
 
 ---
 
-##  See It In Action — 60 Second Demo
-
 <div align="center">
 
 ```diff
