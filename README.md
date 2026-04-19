@@ -556,7 +556,9 @@ The architecture is deliberately shaped for staging deployment:
 </td></tr>
 </table>
 
-**The prototype isn't a toy — it's a correctly-factored skeleton of the production system.** Swapping tool backends is drop-in.
+**The prototype is a correctly-factored skeleton of the production system.** Swapping tool backends is drop-in.
+
+[Sentinel Copilot Dashboard](https://tanx1509.github.io/sentinel-incident-copilot/dashboard/)
 
 ---
 
