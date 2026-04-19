@@ -1,0 +1,92 @@
+{
+  "current_incident": {
+    "incident_id": "INC-2026-04-19-0042",
+    "fired_at": "2026-04-19T14:32:04+08:00",
+    "severity_guess": "Sev-2",
+    "alert": {
+      "title": "GrabPay checkout success rate degraded",
+      "metric": "payment.checkout.success_rate",
+      "value_before": 0.994,
+      "value_now": 0.912,
+      "threshold": 0.98,
+      "region": "ID-JKT",
+      "service": "payment-gateway",
+      "window": "8m"
+    },
+    "raw_payload": "p99 latency > 2s on payments-api; success rate 91.2% in ID-JKT"
+  },
+  "historical_incidents": [
+    {
+      "id": "INC-2025-11-03-0018",
+      "title": "KYC vendor rate-limit during Tokopedia flash sale",
+      "symptoms": "GrabPay checkout failures spiking in ID region. ERR_KYC_TIMEOUT dominant. kyc-proxy latency 25x normal. No internal deploys.",
+      "root_cause": "External KYC vendor (vendor-kyc-id) hit rate-limit during promotional event. Our circuit breaker was mis-configured and did not trip.",
+      "mitigation": "Failover to backup KYC provider via: kubectl set env deploy/kyc-proxy KYC_PRIMARY=backup -n payments. Then fixed circuit breaker threshold.",
+      "services_involved": ["payment-gateway", "kyc-proxy", "vendor-kyc-id"],
+      "region": "ID-JKT",
+      "mttr_minutes": 14,
+      "resolved": true,
+      "tags": ["kyc", "payment", "external-vendor", "indonesia", "rate-limit"]
+    },
+    {
+      "id": "INC-2025-08-17-0009",
+      "title": "KYC partner unannounced maintenance",
+      "symptoms": "Checkout failure rate jumped in Indonesia. KYC upstream returning 503s. No code changes.",
+      "root_cause": "KYC vendor performed maintenance without notifying partners. DNS still resolved but endpoint rejected traffic.",
+      "mitigation": "Manual failover to backup KYC provider. Added vendor status page scraping for early warning.",
+      "services_involved": ["kyc-proxy", "vendor-kyc-id", "payment-gateway"],
+      "region": "ID-JKT",
+      "mttr_minutes": 22,
+      "resolved": true,
+      "tags": ["kyc", "vendor", "maintenance", "indonesia"]
+    },
+    {
+      "id": "INC-2026-02-14-0031",
+      "title": "KYC retry storm after network blip",
+      "symptoms": "Cascading failures in payments after a 30-second network partition. Retry queue grew unbounded.",
+      "root_cause": "Retry logic in kyc-proxy had no backoff. After brief network issue resolved, retry storm DDoS'd the vendor.",
+      "mitigation": "Added exponential backoff and request deduplication. Bulkhead isolation for KYC calls.",
+      "services_involved": ["kyc-proxy", "payment-gateway"],
+      "region": "ID-JKT",
+      "mttr_minutes": 38,
+      "resolved": true,
+      "tags": ["kyc", "retry", "resilience", "indonesia"]
+    },
+    {
+      "id": "INC-2025-09-22-0044",
+      "title": "Redis connection pool exhaustion",
+      "symptoms": "Payment latency p99 climbed from 200ms to 3s. No error rate change initially. Connections timing out.",
+      "root_cause": "Connection pool size was static and hit ceiling during traffic spike. New pod deployments didn't scale pool.",
+      "mitigation": "Increased pool size via config map rollout. Added HPA for connection count.",
+      "services_involved": ["payment-gateway", "redis-cache"],
+      "region": "SG",
+      "mttr_minutes": 41,
+      "resolved": true,
+      "tags": ["redis", "connection-pool", "latency", "singapore"]
+    },
+    {
+      "id": "INC-2025-12-01-0055",
+      "title": "Fraud scoring model deploy regression",
+      "symptoms": "Sudden drop in payment approvals across all regions. False-positive fraud flags.",
+      "root_cause": "ML model v2.4 deployed with incorrect threshold calibration. Deploy diff was small and missed in review.",
+      "mitigation": "Rolled back to v2.3 via feature flag. Re-trained with proper validation set.",
+      "services_involved": ["fraud-scoring", "payment-gateway"],
+      "region": "ALL",
+      "mttr_minutes": 27,
+      "resolved": true,
+      "tags": ["ml", "deploy", "regression", "fraud"]
+    },
+    {
+      "id": "INC-2026-01-19-0003",
+      "title": "Kafka consumer lag on wallet-ledger",
+      "symptoms": "Wallet balance updates delayed by 4-12 minutes. User complaints about missing top-ups.",
+      "root_cause": "Consumer group rebalance triggered by scaling event never completed. One consumer was stuck.",
+      "mitigation": "Force-killed stuck consumer pod, triggered re-election. Added liveness probe.",
+      "services_involved": ["wallet-ledger", "kafka"],
+      "region": "ALL",
+      "mttr_minutes": 52,
+      "resolved": true,
+      "tags": ["kafka", "consumer-lag", "wallet"]
+    }
+  ]
+}
