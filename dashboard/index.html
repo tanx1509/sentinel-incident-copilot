@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SENTINEL — Incident Co-Pilot · Live Demo</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  body {
+    font-family: 'Inter', sans-serif;
+    background: #0a0b0f;
+    color: #e4e4e7;
+    overflow-x: hidden;
+  }
+  .font-mono { font-family: 'JetBrains Mono', monospace; }
+  .glow-green  { box-shadow: 0 0 20px rgba(34,197,94,.4); }
+  .glow-red    { box-shadow: 0 0 20px rgba(239,68,68,.5); }
+  .glow-blue   { box-shadow: 0 0 20px rgba(59,130,246,.4); }
+  .glow-purple { box-shadow: 0 0 20px rgba(168,85,247,.4); }
+  .glow-amber  { box-shadow: 0 0 20px rgba(251,191,36,.4); }
+
+  @keyframes pulse-ring {
+    0% { box-shadow: 0 0 0 0 currentColor; opacity: .8; }
+    100% { box-shadow: 0 0 0 20px transparent; opacity: 0; }
+  }
+  .pulse-ring::after {
+    content: ''; position: absolute; inset: 0; border-radius: inherit;
+    animation: pulse-ring 1.4s cubic-bezier(0.66,0,0,1) infinite;
+  }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .slide-in { animation: slideIn .3s ease-out; }
+  @keyframes blink { 50% { opacity: .3; } }
+  .blink { animation: blink 1s infinite; }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: #111827; }
+  ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+
+  .grid-bg {
+    background-image:
+      radial-gradient(circle at 50% 50%, rgba(59,130,246,.08) 0%, transparent 40%),
+      linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+    background-size: 100% 100%, 48px 48px, 48px 48px;
+  }
+  .gradient-text {
+    background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .card {
+    background: rgba(17, 24, 39, 0.7);
+    border: 1px solid rgba(75, 85, 99, 0.3);
+    backdrop-filter: blur(10px);
+  }
+</style>
+</head>
+<body class="grid-bg min-h-screen">
+
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useMemo } = React;
+
+/* ================================================================
+   DATA — replays your real sentinel demo output deterministically
+================================================================ */
+
+const AGENTS = {
+  TRIAGE:       { color: 'cyan',    emoji: '🩺', model: 'Gemini Flash-Lite', role: 'Severity Classifier' },
+  HISTORIAN:    { color: 'fuchsia', emoji: '📚', model: 'Gemini Flash',      role: 'Vector Memory Lookup' },
+  FORENSIC:     { color: 'amber',   emoji: '🔬', model: 'Gemini Flash',      role: 'Evidence Gatherer' },
+  ORCHESTRATOR: { color: 'blue',    emoji: '🧠', model: 'Gemini Pro',        role: 'Hypothesis Synthesis' },
+  CRITIC:       { color: 'green',   emoji: '✅', model: 'Gemini Pro',        role: 'Anti-Hallucination' },
+  SCRIBE:       { color: 'white',   emoji: '📝', model: 'Gemini Flash-Lite', role: 'Narrator' },
+};
+
+// Every step in the demo — drives every panel
+const SCRIPT = [
+  { t: 100,  type: 'alert',     payload: { title: 'PagerDuty fires', region: 'ID-JKT' } },
+  { t: 400,  type: 'agent',     agent: 'TRIAGE',       thought: 'Alert is payment-related, customer-impacting, regional. Classify severity by checking error budget burn rate.' },
+  { t: 700,  type: 'tool',      agent: 'TRIAGE',       tool: 'datadog_query_metrics', args: "metric='payment.checkout.error_codes', region='ID-JKT'" },
+  { t: 1100, type: 'agent',     agent: 'TRIAGE',       thought: 'Success rate dropped 8.2%. Dominant error: ERR_KYC_TIMEOUT (73%). Regional systemic.', decision: 'Sev-2 confirmed. SYSTEMIC_REGIONAL.' },
+  { t: 1400, type: 'agent',     agent: 'HISTORIAN',    thought: 'Check institutional memory before reasoning from scratch.' },
+  { t: 1700, type: 'tool',      agent: 'HISTORIAN',    tool: 'episodic_memory.similar_incidents', args: "query='payment ERR_KYC_TIMEOUT ID-JKT'" },
+  { t: 1900, type: 'memory',    payload: { queried: true, matches: 3 } },
+  { t: 2200, type: 'agent',     agent: 'HISTORIAN',    thought: 'Top match: INC-2025-11-03 (sim=0.371) — KYC vendor rate-limit. Historical MTTR: 14min.', decision: 'STRONG prior. KYC pattern is prime suspect.' },
+  { t: 2500, type: 'agent',     agent: 'FORENSIC',     thought: 'Parallel investigation — deploys, blast radius, pod health.' },
+  { t: 2700, type: 'tool',      agent: 'FORENSIC',     tool: 'github_diff_last_deploy', args: "service='payment-gateway'" },
+  { t: 2900, type: 'agent',     agent: 'FORENSIC',     thought: '2 deploys in last 24h, none touched KYC path. Code regression probability: LOW.' },
+  { t: 3100, type: 'tool',      agent: 'FORENSIC',     tool: 'datadog_query_metrics', args: "metric='http.client.latency.kyc-proxy'" },
+  { t: 3300, type: 'metric',    payload: { spike: true } },
+  { t: 3500, type: 'agent',     agent: 'FORENSIC',     thought: 'kyc-proxy p99: 340ms → 8,200ms (24.1x spike detected).', decision: 'STRONG signal: kyc-proxy is likely root-cause candidate.' },
+  { t: 3800, type: 'tool',      agent: 'FORENSIC',     tool: 'k8s_describe_pods', args: "service='kyc-proxy'" },
+  { t: 4000, type: 'agent',     agent: 'FORENSIC',     thought: '3 pods, 0 restarts, 0 OOMs. Internal pod issue RULED OUT.' },
+  { t: 4300, type: 'agent',     agent: 'ORCHESTRATOR', thought: 'Synthesizing all evidence into ranked hypothesis tree.' },
+  { t: 4700, type: 'hypothesis', payload: {
+      top: { id: 'H1', claim: 'External vendor downstream of kyc-proxy is degraded', confidence: 0.90 },
+      all: [
+        { id: 'H1', claim: 'External vendor downstream degraded',       confidence: 0.90, color: 'emerald' },
+        { id: 'H3', claim: 'Network path issue region → vendor DC',     confidence: 0.08, color: 'slate' },
+        { id: 'H2', claim: 'Internal kyc-proxy issue (memory/conn)',    confidence: 0.05, color: 'slate' },
+      ]
+  }},
+  { t: 5000, type: 'agent',     agent: 'ORCHESTRATOR', thought: 'Top hypothesis: 90% confidence. Evidence across 3 agents aligns.', decision: 'Request Critic approval for broadcast.' },
+  { t: 5300, type: 'agent',     agent: 'CRITIC',       thought: 'Verifying H1 before broadcast — 5 checks.' },
+  { t: 5500, type: 'check',     payload: { name: 'services_valid',       status: 'PASS' } },
+  { t: 5700, type: 'check',     payload: { name: 'historical_match_exists', status: 'PASS' } },
+  { t: 5900, type: 'check',     payload: { name: 'has_evidence',         status: 'PASS' } },
+  { t: 6100, type: 'check',     payload: { name: 'meets_broadcast_threshold', status: 'PASS' } },
+  { t: 6300, type: 'check',     payload: { name: 'no_unauthorized_writes', status: 'PASS' } },
+  { t: 6500, type: 'agent',     agent: 'CRITIC',       decision: '✅ APPROVED — 5/5 checks pass. Broadcast authorized.' },
+  { t: 6800, type: 'broadcast', payload: { posted: true } },
+  { t: 7400, type: 'human',     payload: { user: 'sre-lead', msg: 'confirmed — vendor status page shows incident. /approve-kyc-failover' } },
+  { t: 7800, type: 'guardrail', payload: { blocked: true, reason: 'WRITE_BLOCKED: approval_token required for non-dry-run execution.' } },
+  { t: 8400, type: 'guardrail', payload: { blocked: false, reason: 'Dry-run PASS — affects: [deployment/kyc-proxy]' } },
+  { t: 9000, type: 'execute',   payload: { success: true, rollout: 34 } },
+  { t: 9600, type: 'recovery',  payload: { success_rate: 0.989, latency_p99: 420 } },
+  { t: 10400, type: 'postmortem', payload: { mttr: 4, historical_mttr: 14 } },
+  { t: 11000, type: 'memory_update', payload: { newCount: 7 } },
+  { t: 11600, type: 'done' },
+];
+
+const INITIAL_METRICS = [
+  { t: '14:00', v: 99.4 }, { t: '14:10', v: 99.3 }, { t: '14:20', v: 99.1 },
+  { t: '14:24', v: 96.7 }, { t: '14:28', v: 93.4 }, { t: '14:32', v: 91.2 },
+];
+
+const MEMORY_NODES = [
+  { id: 'INC-11-03', label: 'Tokopedia flash sale KYC rate-limit',  tags: ['kyc','id','vendor'], mttr: 14 },
+  { id: 'INC-08-17', label: 'KYC partner unannounced maintenance',  tags: ['kyc','id'],           mttr: 22 },
+  { id: 'INC-02-14', label: 'KYC retry storm after network blip',   tags: ['kyc','retry'],        mttr: 38 },
+  { id: 'INC-09-22', label: 'Redis connection pool exhaustion',     tags: ['redis','sg'],         mttr: 41 },
+  { id: 'INC-12-01', label: 'Fraud scoring deploy regression',      tags: ['ml','deploy'],        mttr: 27 },
+  { id: 'INC-01-19', label: 'Kafka consumer lag wallet-ledger',     tags: ['kafka'],              mttr: 52 },
+];
+
+/* ================================================================
+   COMPONENTS
+================================================================ */
+
+function AgentCard({ agentKey, status, thought, decision, active, model, role }) {
+  const a = AGENTS[agentKey];
+  const statusColors = {
+    idle:    'text-gray-500 border-gray-700',
+    busy:    `text-${a.color}-400 border-${a.color}-500 glow-${a.color === 'fuchsia' ? 'purple' : a.color}`,
+    done:    `text-${a.color}-300 border-${a.color}-600`,
+  };
+
+  const dot = {
+    idle: 'bg-gray-600',
+    busy: `bg-${a.color}-400 blink`,
+    done: `bg-${a.color}-500`,
+  }[status];
+
+  return (
+    <div className={`card rounded-xl p-4 relative transition-all duration-300 ${active ? 'ring-2 ring-offset-2 ring-offset-gray-950 ring-' + a.color + '-500' : ''}`}>
+      <div className="flex items-start justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <span className="text-2xl">{a.emoji}</span>
+          <div>
+            <div className="font-bold text-white tracking-wide text-sm">{agentKey}</div>
+            <div className="text-[10px] text-gray-400">{role}</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <div className={`w-2 h-2 rounded-full ${dot}`}></div>
+          <span className="text-[10px] uppercase tracking-wider text-gray-400">{status}</span>
+        </div>
+      </div>
+      <div className="text-[10px] text-gray-500 font-mono mb-2">{model}</div>
+      {thought && (
+        <div className="text-xs text-gray-300 mt-2 border-l-2 border-gray-700 pl-2">
+          {thought}
+        </div>
+      )}
+      {decision && (
+        <div className="text-xs text-green-400 mt-2 font-medium">
+          → {decision}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReasoningLog({ lines }) {
+  const endRef = useRef(null);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [lines]);
+
+  return (
+    <div className="card rounded-xl overflow-hidden h-full flex flex-col">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-800 bg-gray-900/50">
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1.5">
+            <div className="w-3 h-3 rounded-full bg-red-500"></div>
+            <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+            <div className="w-3 h-3 rounded-full bg-green-500"></div>
+          </div>
+          <span className="text-xs text-gray-400 ml-2 font-mono">sentinel-reasoning-stream</span>
+        </div>
+        <span className="text-[10px] text-gray-500 font-mono">{lines.length} events</span>
+      </div>
+      <div className="p-3 overflow-y-auto flex-1 font-mono text-xs leading-relaxed bg-black/30" style={{maxHeight: '520px'}}>
+        {lines.map((line, i) => (
+          <div key={i} className="slide-in mb-2">{line}</div>
+        ))}
+        <div ref={endRef} />
+      </div>
+    </div>
+  );
+}
+
+function HypothesisTree({ hypotheses }) {
+  return (
+    <div className="card rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-bold text-white tracking-wide">HYPOTHESIS TREE</h3>
+        <span className="text-[10px] text-gray-500 font-mono">Critic-verified</span>
+      </div>
+      {hypotheses.length === 0 ? (
+        <div className="text-xs text-gray-600 italic py-4 text-center">Awaiting Orchestrator synthesis...</div>
+      ) : (
+        <div className="space-y-3">
+          {hypotheses.map((h, i) => (
+            <div key={h.id} className="slide-in">
+              <div className="flex items-center justify-between mb-1 text-xs">
+                <span className="font-mono font-bold text-white">{h.id}</span>
+                <span className="font-mono text-gray-400">{(h.confidence * 100).toFixed(0)}%</span>
+              </div>
+              <div className="relative h-6 bg-gray-900 rounded overflow-hidden border border-gray-800">
+                <div
+                  className={`h-full transition-all duration-700 ease-out ${i === 0 ? 'bg-gradient-to-r from-emerald-600 to-emerald-400' : 'bg-gray-700'}`}
+                  style={{ width: `${h.confidence * 100}%` }}
+                />
+                <div className="absolute inset-0 flex items-center px-2">
+                  <span className="text-[10px] text-white truncate">{h.claim}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MemoryGraph({ pulseNode, incidentAdded }) {
+  const nodes = useMemo(() => {
+    const base = MEMORY_NODES.map((n, i) => {
+      const angle = (i / MEMORY_NODES.length) * Math.PI * 2;
+      return { ...n, x: 50 + Math.cos(angle) * 35, y: 50 + Math.sin(angle) * 35 };
+    });
+    if (incidentAdded) {
+      base.push({ id: 'INC-0042', label: 'KYC vendor rate-limit (NEW)', x: 50, y: 50, fresh: true, mttr: 4 });
+    }
+    return base;
+  }, [incidentAdded]);
+
+  return (
+    <div className="card rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-bold text-white tracking-wide">🧠 EPISODIC MEMORY</h3>
+        <span className="text-[10px] text-gray-500 font-mono">{nodes.length} incidents</span>
+      </div>
+      <div className="relative w-full" style={{ aspectRatio: '1/1', maxHeight: 280 }}>
+        <svg viewBox="0 0 100 100" className="w-full h-full">
+          {nodes.filter(n => n.id !== 'INC-0042').map((n) => (
+            <line key={'line-' + n.id} x1="50" y1="50" x2={n.x} y2={n.y}
+                  stroke={pulseNode ? "rgba(168,85,247,0.4)" : "rgba(75,85,99,0.25)"}
+                  strokeWidth="0.15" strokeDasharray="0.5 0.5" />
+          ))}
+          {nodes.map((n) => {
+            const isPulsing = pulseNode && !n.fresh;
+            const isFresh   = n.fresh;
+            return (
+              <g key={n.id}>
+                <circle
+                  cx={n.x} cy={n.y}
+                  r={isFresh ? 4 : 2.5}
+                  fill={isFresh ? "#10b981" : isPulsing ? "#a855f7" : "#4b5563"}
+                  opacity={isPulsing ? 0.9 : 0.7}
+                  style={isPulsing ? { filter: 'drop-shadow(0 0 3px #a855f7)' } : isFresh ? { filter: 'drop-shadow(0 0 4px #10b981)' } : {}}
+                />
+                <text x={n.x} y={n.y + (isFresh ? 7 : 5.5)} fontSize="2" fill={isFresh ? '#6ee7b7' : '#9ca3af'} textAnchor="middle" fontFamily="JetBrains Mono">
+                  {n.id}
+                </text>
+                {isFresh && (
+                  <text x={n.x} y={n.y - 5} fontSize="1.8" fill="#10b981" textAnchor="middle" fontWeight="bold">
+                    ✨ JUST LEARNED
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function MetricsChart({ data, recovered }) {
+  const maxT = 15;
+  const points = data.map((d, i) => `${(i / Math.max(data.length - 1, 1)) * 100},${100 - (d.v - 88) * 8}`).join(' ');
+  const cur = data[data.length - 1]?.v ?? 99.4;
+
+  return (
+    <div className="card rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-bold text-white tracking-wide">📊 CHECKOUT SUCCESS — ID-JKT</h3>
+        <div className="flex items-center gap-2">
+          <span className={`text-2xl font-bold font-mono ${cur > 98 ? 'text-green-400' : cur > 95 ? 'text-amber-400' : 'text-red-400'}`}>
+            {cur.toFixed(1)}%
+          </span>
+          {recovered && <span className="text-[10px] text-green-400 animate-pulse">● RECOVERED</span>}
+        </div>
+      </div>
+      <svg viewBox="0 0 100 60" className="w-full" style={{ height: 140 }}>
+        <defs>
+          <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={recovered ? "#10b981" : "#ef4444"} stopOpacity="0.4" />
+            <stop offset="100%" stopColor={recovered ? "#10b981" : "#ef4444"} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <line x1="0" y1="12" x2="100" y2="12" stroke="#374151" strokeDasharray="1 1" strokeWidth="0.3"/>
+        <text x="2" y="11" fontSize="2" fill="#6b7280">98% threshold</text>
+        <polyline points={points} fill="none" stroke={recovered ? "#10b981" : "#ef4444"} strokeWidth="0.8"/>
+        <polygon points={`0,60 ${points} 100,60`} fill="url(#grad)" />
+        {data.map((d, i) => (
+          <circle key={i} cx={(i / Math.max(data.length - 1, 1)) * 100} cy={100 - (d.v - 88) * 8} r="0.8" fill={recovered ? "#10b981" : "#ef4444"}/>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+function StatPill({ label, value, color, icon }) {
+  return (
+    <div className="card rounded-lg p-3">
+      <div className="flex items-center gap-2 mb-1">
+        <span>{icon}</span>
+        <span className="text-[10px] uppercase tracking-wider text-gray-500">{label}</span>
+      </div>
+      <div className={`text-xl font-bold ${color} font-mono`}>{value}</div>
+    </div>
+  );
+}
+
+/* ================================================================
+   MAIN APP
+================================================================ */
+
+function App() {
+  const [playing, setPlaying] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [events, setEvents] = useState([]);
+  const [logLines, setLogLines] = useState([]);
+  const [agentStatus, setAgentStatus] = useState({
+    TRIAGE: 'idle', HISTORIAN: 'idle', FORENSIC: 'idle',
+    ORCHESTRATOR: 'idle', CRITIC: 'idle', SCRIBE: 'idle',
+  });
+  const [agentData, setAgentData] = useState({});
+  const [hypotheses, setHypotheses] = useState([]);
+  const [metrics, setMetrics] = useState(INITIAL_METRICS);
+  const [checks, setChecks] = useState([]);
+  const [broadcast, setBroadcast] = useState(false);
+  const [guardrailBlocked, setGuardrailBlocked] = useState(false);
+  const [recovered, setRecovered] = useState(false);
+  const [memoryPulse, setMemoryPulse] = useState(false);
+  const [memoryUpdated, setMemoryUpdated] = useState(false);
+  const [humanMsg, setHumanMsg] = useState(null);
+  const [stats, setStats] = useState({ toolCalls: 0, llmCalls: 0, mttr: '--' });
+
+  const startRef = useRef(null);
+  const frameRef = useRef(null);
+  const indexRef = useRef(0);
+
+  const resetAll = () => {
+    setPlaying(false);
+    setElapsed(0);
+    setEvents([]);
+    setLogLines([]);
+    setAgentStatus({ TRIAGE: 'idle', HISTORIAN: 'idle', FORENSIC: 'idle', ORCHESTRATOR: 'idle', CRITIC: 'idle', SCRIBE: 'idle' });
+    setAgentData({});
+    setHypotheses([]);
+    setMetrics(INITIAL_METRICS);
+    setChecks([]);
+    setBroadcast(false);
+    setGuardrailBlocked(false);
+    setRecovered(false);
+    setMemoryPulse(false);
+    setMemoryUpdated(false);
+    setHumanMsg(null);
+    setStats({ toolCalls: 0, llmCalls: 0, mttr: '--' });
+    indexRef.current = 0;
+    if (frameRef.current) cancelAnimationFrame(frameRef.current);
+  };
+
+  const applyEvent = (ev) => {
+    const ts = `[+${(ev.t / 1000).toFixed(2)}s]`;
+    const colorMap = { cyan: 'text-cyan-400', fuchsia: 'text-fuchsia-400', amber: 'text-amber-400',
+                       blue: 'text-blue-400', green: 'text-green-400', white: 'text-white' };
+
+    if (ev.type === 'alert') {
+      setLogLines(p => [...p, <span><span className="text-gray-500">{ts}</span> <span className="text-red-400 font-bold">🚨 PagerDuty fires</span> — {ev.payload.title} @ {ev.payload.region}</span>]);
+    }
+
+    if (ev.type === 'agent') {
+      const a = AGENTS[ev.agent];
+      setAgentStatus(s => ({ ...s, [ev.agent]: 'busy' }));
+      setAgentData(d => ({ ...d, [ev.agent]: { ...d[ev.agent], thought: ev.thought, decision: ev.decision } }));
+      setLogLines(p => [...p, (
+        <span>
+          <span className="text-gray-500">{ts}</span>{' '}
+          <span className={`font-bold ${colorMap[a.color]}`}>{a.emoji} {ev.agent}</span>{' '}
+          {ev.thought && <span className="text-gray-300">— {ev.thought}</span>}
+          {ev.decision && <div className="ml-20 text-green-400 text-[11px] mt-0.5">→ {ev.decision}</div>}
+        </span>
+      )]);
+      if (ev.decision) setTimeout(() => setAgentStatus(s => ({ ...s, [ev.agent]: 'done' })), 600);
+    }
+
+    if (ev.type === 'tool') {
+      const a = AGENTS[ev.agent];
+      setStats(s => ({ ...s, toolCalls: s.toolCalls + 1, llmCalls: s.llmCalls + 1 }));
+      setLogLines(p => [...p, (
+        <span>
+          <span className="text-gray-500">{ts}</span>{' '}
+          <span className={colorMap[a.color]}>{a.emoji} {ev.agent}</span>{' '}
+          <span className="text-yellow-400">⚡ {ev.tool}</span>
+          <span className="text-gray-500">({ev.args})</span>
+        </span>
+      )]);
+    }
+
+    if (ev.type === 'memory') {
+      setMemoryPulse(true);
+      setTimeout(() => setMemoryPulse(false), 1500);
+      setLogLines(p => [...p, <span><span className="text-gray-500">{ts}</span> <span className="text-fuchsia-400">🧠 Memory queried</span> — {ev.payload.matches} similar incidents retrieved</span>]);
+    }
+
+    if (ev.type === 'metric') {
+      setMetrics(m => [...m, { t: '14:33', v: 91.2 }]);
+    }
+
+    if (ev.type === 'hypothesis') {
+      setHypotheses(ev.payload.all);
+      setLogLines(p => [...p, <span><span className="text-gray-500">{ts}</span> <span className="text-blue-400 font-bold">📊 Hypothesis tree built</span> — Top: {ev.payload.top.id} at {(ev.payload.top.confidence*100).toFixed(0)}% confidence</span>]);
+    }
+
+    if (ev.type === 'check') {
+      setChecks(c => [...c, ev.payload]);
+      setAgentStatus(s => ({ ...s, CRITIC: 'busy' }));
+      setLogLines(p => [...p, <span><span className="text-gray-500">{ts}</span> <span className="text-green-400">✅ CHECK [{ev.payload.name}]</span>: <span className="text-green-300 font-bold">{ev.payload.status}</span></span>]);
+    }
+
+    if (ev.type === 'broadcast') {
+      setBroadcast(true);
+      setAgentStatus(s => ({ ...s, CRITIC: 'done' }));
+      setLogLines(p => [...p, <span><span className="text-gray-500">{ts}</span> <span className="text-green-400 font-bold">💬 BROADCAST POSTED</span> to #war-room-INC-0042</span>]);
+    }
+
+    if (ev.type === 'human') {
+      setHumanMsg(ev.payload);
+      setLogLines(p => [...p, <span><span className="text-gray-500">{ts}</span> <span className="text-white font-bold">👤 @{ev.payload.user}</span>: {ev.payload.msg}</span>]);
+    }
+
+    if (ev.type === 'guardrail') {
+      if (ev.payload.blocked) {
+        setGuardrailBlocked(true);
+        setLogLines(p => [...p, <span><span className="text-gray-500">{ts}</span> <span className="text-red-400 font-bold">🔒 GUARDRAIL</span>: {ev.payload.reason}</span>]);
+      } else {
+        setGuardrailBlocked(false);
+        setLogLines(p => [...p, <span><span className="text-gray-500">{ts}</span> <span className="text-yellow-400">🧪 Dry-run</span>: {ev.payload.reason}</span>]);
+      }
+    }
+
+    if (ev.type === 'execute') {
+      setLogLines(p => [...p, <span><span className="text-gray-500">{ts}</span> <span className="text-green-400 font-bold">⚡ EXECUTED</span> — Rolled out in {ev.payload.rollout}s ✓</span>]);
+    }
+
+    if (ev.type === 'recovery') {
+      setRecovered(true);
+      setMetrics(m => [...m, { t: '14:35', v: 98.9 }]);
+      setLogLines(p => [...p, <span><span className="text-gray-500">{ts}</span> <span className="text-green-400 font-bold">✨ RECOVERY</span> — success rate {(ev.payload.success_rate*100).toFixed(1)}%, p99 {ev.payload.latency_p99}ms</span>]);
+    }
+
+    if (ev.type === 'postmortem') {
+      setStats(s => ({ ...s, mttr: `${ev.payload.mttr}m` }));
+      setLogLines(p => [...p, <span><span className="text-gray-500">{ts}</span> <span className="text-blue-400 font-bold">📝 POST-MORTEM</span> — MTTR {ev.payload.mttr}min (vs. {ev.payload.historical_mttr}min historical)</span>]);
+    }
+
+    if (ev.type === 'memory_update') {
+      setMemoryUpdated(true);
+      setLogLines(p => [...p, <span><span className="text-gray-500">{ts}</span> <span className="text-fuchsia-400 font-bold">🧠 MEMORY DELTA</span> — Corpus grew {ev.payload.newCount-1} → {ev.payload.newCount} incidents ✨</span>]);
+    }
+
+    if (ev.type === 'done') {
+      setPlaying(false);
+      setLogLines(p => [...p, <span className="text-green-400 font-bold">━━━ ✅ INCIDENT RESOLVED · All agents complete ━━━</span>]);
+    }
+  };
+
+  useEffect(() => {
+    if (!playing) return;
+    startRef.current = performance.now() - elapsed;
+
+    const tick = () => {
+      const now = performance.now();
+      const t = now - startRef.current;
+      setElapsed(t);
+
+      while (indexRef.current < SCRIPT.length && SCRIPT[indexRef.current].t <= t) {
+        applyEvent(SCRIPT[indexRef.current]);
+        indexRef.current += 1;
+      }
+      if (indexRef.current < SCRIPT.length) frameRef.current = requestAnimationFrame(tick);
+    };
+    frameRef.current = requestAnimationFrame(tick);
+    return () => { if (frameRef.current) cancelAnimationFrame(frameRef.current); };
+  }, [playing]);
+
+  const fireIncident = () => { resetAll(); setTimeout(() => setPlaying(true), 100); };
+
+  return (
+    <div className="min-h-screen px-6 py-6 max-w-[1600px] mx-auto">
+
+      {/* HEADER */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <div className="flex items-center gap-3 mb-1">
+            <div className="text-4xl">🚨</div>
+            <h1 className="text-4xl font-black gradient-text tracking-tight">SENTINEL</h1>
+            <span className="text-xs text-gray-500 font-mono border border-gray-700 rounded px-2 py-0.5">v1.0</span>
+          </div>
+          <p className="text-sm text-gray-400">The Incident Co-Pilot That Never Sleeps · <span className="text-gray-500">Grab Hack 2.0</span></p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={fireIncident}
+            disabled={playing}
+            className="relative px-6 py-3 rounded-lg bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-500 hover:to-orange-500 text-white font-bold tracking-wide transition-all shadow-lg shadow-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <span className="relative z-10">🔥 FIRE INCIDENT</span>
+          </button>
+          <button onClick={resetAll} className="px-4 py-3 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm">
+            ↻ Reset
+          </button>
+          <a href="https://github.com/tanx1509/sentinel-incident-copilot" target="_blank" rel="noopener" className="px-4 py-3 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm">
+            ⭐ GitHub
+          </a>
+        </div>
+      </div>
+
+      {/* TOP STAT STRIP */}
+      <div className="grid grid-cols-6 gap-3 mb-6">
+        <StatPill label="Incident ID"  value="INC-0042"              color="text-white"   icon="🎫" />
+        <StatPill label="Region"       value="ID-JKT"                color="text-orange-400" icon="📍" />
+        <StatPill label="Severity"     value={agentStatus.TRIAGE === 'idle' ? '?' : 'Sev-2'}   color="text-amber-400" icon="⚠️" />
+        <StatPill label="Tool Calls"   value={stats.toolCalls}       color="text-blue-400"   icon="🔧" />
+        <StatPill label="LLM Calls"    value={stats.llmCalls}        color="text-fuchsia-400" icon="🧠" />
+        <StatPill label="MTTR"         value={stats.mttr}            color="text-green-400"  icon="⏱️" />
+      </div>
+
+      {/* ALERT BANNER */}
+      <div className={`mb-6 rounded-xl p-4 transition-all ${playing || logLines.length > 0 ? 'bg-red-950/40 border border-red-900' : 'bg-gray-900/40 border border-gray-800'}`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={`w-3 h-3 rounded-full ${playing ? 'bg-red-500 blink' : 'bg-gray-600'}`}></div>
+            <span className="text-sm font-bold text-white">GrabPay checkout success rate degraded</span>
+            <span className="text-xs text-gray-400 font-mono">payment.checkout.success_rate: 99.4% → 91.2%</span>
+          </div>
+          <div className="text-xs text-gray-400 font-mono">
+            {playing ? `⏱ t+${(elapsed / 1000).toFixed(2)}s` : 'ready'}
+          </div>
+        </div>
+      </div>
+
+      {/* MAIN GRID */}
+      <div className="grid grid-cols-12 gap-6 mb-6">
+
+        {/* LEFT: Agents */}
+        <div className="col-span-3 space-y-3">
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">AGENT SWARM</h2>
+          {Object.keys(AGENTS).map(k => (
+            <AgentCard
+              key={k}
+              agentKey={k}
+              status={agentStatus[k]}
+              thought={agentData[k]?.thought}
+              decision={agentData[k]?.decision}
+              active={agentStatus[k] === 'busy'}
+              model={AGENTS[k].model}
+              role={AGENTS[k].role}
+            />
+          ))}
+        </div>
+
+        {/* CENTER: Reasoning stream */}
+        <div className="col-span-6 space-y-4">
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">LIVE REASONING STREAM</h2>
+          <ReasoningLog lines={logLines} />
+
+          {/* Broadcast card */}
+          {broadcast && (
+            <div className="card rounded-xl p-4 slide-in border-green-700 glow-green">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-lg">💬</span>
+                <span className="font-bold text-green-400">SENTINEL → #war-room-INC-0042</span>
+              </div>
+              <div className="bg-black/40 rounded p-3 font-mono text-xs space-y-1">
+                <div className="text-emerald-300 font-bold">🎯 TOP HYPOTHESIS (confidence 90%)</div>
+                <div className="text-gray-300">External vendor downstream of kyc-proxy is degraded</div>
+                <div className="text-gray-500 mt-2">📊 Evidence: Historical match + 24.1x latency spike + no deploys</div>
+                <div className="text-gray-500">📚 Historical playbook INC-2025-11-03: failover to backup (14min MTTR)</div>
+                <div className="text-yellow-300 mt-2">🔧 Proposed: kubectl set env deploy/kyc-proxy KYC_PRIMARY=backup</div>
+                <div className="text-red-300">⚠️  Blast radius: ~12,400 checkouts/min · $23,000/min</div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* RIGHT: Hypothesis + metrics + memory */}
+        <div className="col-span-3 space-y-4">
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">LIVE STATE</h2>
+          <HypothesisTree hypotheses={hypotheses} />
+          <MetricsChart data={metrics} recovered={recovered} />
+          <MemoryGraph pulseNode={memoryPulse} incidentAdded={memoryUpdated} />
+        </div>
+      </div>
+
+      {/* BOTTOM ROW: Critic checks + Guardrail + Impact */}
+      <div className="grid grid-cols-3 gap-6 mb-6">
+
+        {/* Critic checks */}
+        <div className="card rounded-xl p-5">
+          <h3 className="text-sm font-bold text-white mb-3">✅ CRITIC VERIFICATION</h3>
+          {checks.length === 0 ? (
+            <div className="text-xs text-gray-600 italic">Awaiting hypothesis broadcast...</div>
+          ) : (
+            <div className="space-y-2">
+              {checks.map((c, i) => (
+                <div key={i} className="flex items-center justify-between slide-in text-xs font-mono">
+                  <span className="text-gray-300">{c.name}</span>
+                  <span className="text-green-400 font-bold">✓ {c.status}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Guardrail */}
+        <div className={`card rounded-xl p-5 transition-all ${guardrailBlocked ? 'border-red-500 glow-red' : recovered ? 'border-green-600' : ''}`}>
+          <h3 className="text-sm font-bold text-white mb-3">🛡️ GUARDRAILS</h3>
+          {humanMsg ? (
+            <div className="space-y-2 text-xs">
+              <div className="text-gray-400">👤 <span className="text-white font-bold">@{humanMsg.user}</span></div>
+              <div className="text-gray-300 italic">"{humanMsg.msg}"</div>
+              {guardrailBlocked ? (
+                <div className="text-red-400 font-bold mt-2">🔒 WRITE BLOCKED — approval token required</div>
+              ) : recovered ? (
+                <div className="text-green-400 font-bold mt-2">✓ Dry-run PASS → Approved → Executed</div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="text-xs text-gray-600 italic">Standing by for human approval...</div>
+          )}
+        </div>
+
+        {/* Impact */}
+        <div className="card rounded-xl p-5">
+          <h3 className="text-sm font-bold text-white mb-3">💰 IMPACT</h3>
+          <div className="space-y-3">
+            <div>
+              <div className="text-[10px] text-gray-500 uppercase tracking-wider">Est. Revenue Protected</div>
+              <div className="text-2xl font-bold text-green-400 font-mono">
+                ${recovered ? '1,587,000' : '—'}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-gray-500 uppercase tracking-wider">MTTR vs Industry</div>
+              <div className="text-2xl font-bold text-white font-mono">
+                {stats.mttr} <span className="text-gray-500 text-sm">vs 73m avg</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* FOOTER */}
+      <div className="text-center text-xs text-gray-600 mt-8 pb-4">
+        <p className="mb-1">Built by <a href="https://github.com/tanx1509" className="text-fuchsia-400 hover:underline">@tanx1509</a> for Grab Hack 2.0 · Engineering & Product Velocity</p>
+        <p>Powered by Gemini 2.5 Flash · 5-Agent Architecture · 3-Tier Memory · 5-Layer Guardrails</p>
+      </div>
+
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
