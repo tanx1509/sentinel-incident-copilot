@@ -562,12 +562,12 @@ The architecture is deliberately shaped for staging deployment:
 
 ---
 
-##  The Pitch
+##  The Hook
 
 <div align="center">
 
 > ### *"Every other tool tells you something is broken.*
-> ### *Sentinel figures out WHY — and never forgets."*
+> ### *Sentinel figures out WHY, and never forgets."*
 
 </div>
 
